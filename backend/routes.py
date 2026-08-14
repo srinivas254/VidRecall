@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from schemas import (
     VideoRequest,
+    VideoResponse,
     LLMRequest,
     LLMResponse
 )
@@ -10,13 +11,14 @@ from services import (
     get_transcript,
     should_use_rag,
     get_chunks,
-    generate_embeddings
+    generate_embeddings,
+    store_embeddings
 )
 
 router = APIRouter()
 
-@router.post("/video-process")
-async def process_the_video(request: VideoRequest) -> int:
+@router.post("/video-process", response_model=VideoResponse)
+async def process_the_video(request: VideoRequest):
 
     validate_youtube_url(request.url)
 
@@ -30,8 +32,16 @@ async def process_the_video(request: VideoRequest) -> int:
         chunks = get_chunks(text_data)
 
         embeddings = generate_embeddings(chunks)
+
+        total_points = store_embeddings(video_id, chunks, embeddings)
+
+        message = f"Video processed with {total_points} points"
         
-        return 1
+        return VideoResponse(
+            message = message, 
+            video_id = video_id)
     else:
-        return 0
+        return VideoResponse(
+            message = f"Video is small enough, RAG not required",
+            video_id = video_id)
 

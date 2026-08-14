@@ -1,5 +1,6 @@
 from config import (
     client,
+    qdrantClient,
     EMBEDDING_MODEL,
     LLM_MODEL,
     DIRECT_LLM_THRESHOLD,
@@ -19,10 +20,18 @@ from token_embedding_config import (
     model
 )
 
+from qdrant_services import (
+    create_collection_if_not_exists
+)
+
 import re
+import uuid
 import numpy as np 
 import torch
 import torch.nn.functional as F
+from qdrant_client.models import (
+    PointStruct
+) 
 from exceptions import (
     InvalidURLException,
     InvalidVideoIDException,
@@ -173,10 +182,42 @@ def generate_embeddings(chunks: list[str]) -> list[list[float]]:
 
         #from [1,384] to [384] tensor to 384 elements list
         embeddings.append(
-            final_embedding.squeeze().toList()
+            final_embedding.squeeze().tolist()
         )
 
     return embeddings
 
 
+#store all the embeddings into qdrant
+def store_embeddings(
+    video_id: str,
+    chunks: list[str],
+    embeddings: list[list[float]]) -> int:
 
+    points = []
+
+    #convert embeddings into points
+    for index, embedding in enumerate(embeddings):
+
+        point = PointStruct(
+            id = str(uuid.uuid4()),
+            vector = embedding,
+            payload = {
+                "video_id": video_id,
+                "chunk_index": index,
+                "chunk_text": chunks[index]
+            }
+        )
+
+        points.append(point)
+
+    #check if collection exists
+    my_collection = create_collection_if_not_exists()
+
+    #insert it
+    qdrantClient.upsert(
+        collection_name = my_collection,
+        points = points
+    )
+
+    return len(points)
