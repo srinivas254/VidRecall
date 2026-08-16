@@ -1,9 +1,9 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from schemas import (
     VideoRequest,
     VideoResponse,
-    LLMRequest,
-    LLMResponse
+    QuestionRequest,
+    QuestionResponse
 )
 from services import (
     validate_youtube_url,
@@ -12,7 +12,14 @@ from services import (
     should_use_rag,
     get_chunks,
     generate_embeddings,
-    store_embeddings
+    store_embeddings,
+    check_video_processed,
+    generate_query_embeddings,
+    retrieve_chunks
+)
+
+from llm_service import (
+    llm_call
 )
 
 router = APIRouter()
@@ -44,4 +51,21 @@ async def process_the_video(request: VideoRequest):
         return VideoResponse(
             message = f"Video is small enough, RAG not required",
             video_id = video_id)
+
+@router.post("/chat/{video_id}", response_model=QuestionResponse)
+async def retrieve_answer(request: QuestionRequest, video_id = Depends(check_video_processed)):
+
+    query_embedding = generate_query_embeddings(request.question)
+
+    relevant_chunks = retrieve_chunks(video_id, query_embedding)
+
+    context = "\n\n".join(relevant_chunks)
+
+    answer = llm_call(context, request.question)
+
+    return QuestionResponse(
+        answer = answer
+    )
+
+    
 

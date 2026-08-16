@@ -1,9 +1,8 @@
 from config import (
-    client,
     qdrantClient,
     EMBEDDING_MODEL,
-    LLM_MODEL,
     DIRECT_LLM_THRESHOLD,
+    SIMILARITY_THRESHOLD,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     TOP_K)
@@ -21,7 +20,8 @@ from token_embedding_config import (
 )
 
 from qdrant_services import (
-    create_collection_if_not_exists
+    create_collection_if_not_exists,
+    get_existing_collection
 )
 
 import re
@@ -30,13 +30,18 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from qdrant_client.models import (
-    PointStruct
+    PointStruct,
+    Filter,
+    FieldCondition,
+    MatchValue
 ) 
 from exceptions import (
     InvalidURLException,
     InvalidVideoIDException,
     VideoUnavailableException,
-    TranscriptDisabledException
+    TranscriptDisabledException,
+    NoChunksFoundException,
+    VideoNotProcessedException
 )
 
 #regex pattern to validate the url
@@ -221,3 +226,101 @@ def store_embeddings(
     )
 
     return len(points)
+
+
+#check if the video is processed first and return the video id
+def check_video_processed(video_id: str) -> str:
+
+    my_collection = get_existing_collection()
+
+    points, _ = qdrantClient.scroll(
+        collection_name = my_collection,
+        scroll_filter = Filter(
+            must = [
+                FieldCondition(
+                    key="video_id",
+                    match=MatchValue(
+                        value=video_id
+                    )
+                )
+            ]
+        ),
+        limit = 1
+    )
+
+    if not points:
+        raise VideoNotProcessedException(
+            f"Video {video_id} has not been processed yet"
+        )
+
+    return points[0].payload["video_id"]
+
+
+#we pass the question query and return it's embedding
+def generate_query_embeddings(question: str) -> list[float]:
+
+    #return tokens with their IDs
+    inputs = tokenizer(
+        question,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512,
+        padding=True
+    )
+
+    #the transformer inference flow begins till the last hidden state
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    #return the vector with size [n tokens,384]
+    hidden_state = outputs.last_hidden_state
+
+    #converts to [1,384]
+    mean_embedding = hidden_state.mean(dim=1)
+
+    #normalize that 384 dim vector until it's length is 1 unit
+    final_embedding = F.normalize(
+        mean_embedding,
+        p=2,
+        dim=1
+    )
+
+    #from [1,384] tensor to [384] list
+    return final_embedding.squeeze().tolist()
+
+#retrieve the relevant video's chunks
+def retrieve_chunks(video_id: str, query_embedding: list[float]) -> list[str]:
+
+    my_collection = get_existing_collection()
+
+    #from the queryResponse object we filter it based on video id and 
+    #do a similarity vector search and retrieve top k chunks
+    results = qdrantClient.query_points(
+        collection_name = my_collection,
+        query = query_embedding,
+        limit = TOP_K,
+        query_filter = Filter(
+            must = [
+                FieldCondition(
+                    key = "video_id",
+                    match = MatchValue(
+                        value = video_id
+                    )
+                )
+            ]
+        )
+    )
+
+    if not results.points:
+        raise NoChunksFoundException("No chunks found for this video")
+
+    #from that queryResponse we filter out only the chunks and return it if it's similarity
+    #score is greater than cosine 45
+    relevant_chunks = [point.payload["chunk_text"]
+                    for point in results.points
+                    if point.score >= SIMILARITY_THRESHOLD]
+
+    if not relevant_chunks:
+        raise NoChunksFoundException("No relevant chunks found for this video")
+
+    return relevant_chunks

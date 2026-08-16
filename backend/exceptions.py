@@ -10,3 +10,12 @@ class VideoUnavailableException(Exception):
 
 class TranscriptDisabledException(Exception):
     pass
+
+class QdrantCollectionNotFoundException(Exception):
+    pass
+
+class NoChunksFoundException(Exception):
+    pass
+
+class VideoNotProcessedException(Exception):
+    pass

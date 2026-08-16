@@ -5,7 +5,10 @@ from exceptions import (
     InvalidURLException,
     InvalidVideoIDException,
     VideoUnavailableException,
-    TranscriptDisabledException
+    TranscriptDisabledException,
+    QdrantCollectionNotFoundException,
+    NoChunksFoundException,
+    VideoNotProcessedException
 )
 
 async def invalid_url_exception_handler(
@@ -52,6 +55,39 @@ async def transcript_disabled_exception_handler(
         }
     )
 
+async def qdrant_collection_not_found_exception_handler(
+    request: Request,
+    exc: QdrantCollectionNotFoundException
+):
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail":str(exc)
+        }
+    )
+
+async def no_chunks_found_exception_handler(
+    request: Request,
+    exc: NoChunksFoundException
+):
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail":str(exc)
+        }
+    )
+
+async def video_not_processed_exception_handler(
+    request: Request,
+    exc: VideoNotProcessedException
+):
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail":str(exc)
+        }
+    )
+
 async def internal_server_exception_handler(
     request: Request,
     exc: Exception
@@ -62,3 +98,4 @@ async def internal_server_exception_handler(
             "detail": "Internal Server Error"
         }
     )
+

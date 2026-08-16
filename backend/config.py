@@ -18,6 +18,7 @@ LLM_MODEL = "llama-3.3-70b-versatile"
 
 # Direct LLM vs RAG
 DIRECT_LLM_THRESHOLD = 3000
+SIMILARITY_THRESHOLD = 0.7071
 
 # Chunking
 CHUNK_SIZE = 350

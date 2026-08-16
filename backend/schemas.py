@@ -7,8 +7,8 @@ class VideoResponse(BaseModel):
     message: str
     video_id: str
 
-class LLMRequest(BaseModel):
-    prompt: str
+class QuestionRequest(BaseModel):
+    question: str
 
-class LLMResponse(BaseModel):
+class QuestionResponse(BaseModel):
     answer: str

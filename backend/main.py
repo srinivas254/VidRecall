@@ -4,14 +4,20 @@ from exceptions import (
     InvalidURLException,
     InvalidVideoIDException,
     VideoUnavailableException,
-    TranscriptDisabledException
+    TranscriptDisabledException,
+    QdrantCollectionNotFoundException,
+    NoChunksFoundException,
+    VideoNotProcessedException
 )
 from exception_handlers import (
     invalid_url_exception_handler,
     invalid_video_id_exception_handler,
     video_unavailable_exception_handler,
     transcript_disabled_exception_handler,
-    internal_server_exception_handler
+    internal_server_exception_handler,
+    qdrant_collection_not_found_exception_handler,
+    no_chunks_found_exception_handler,
+    video_not_processed_exception_handler
 )
 
 app = FastAPI()
@@ -34,6 +40,21 @@ app.add_exception_handler(
 app.add_exception_handler(
     TranscriptDisabledException,
     transcript_disabled_exception_handler
+)
+
+app.add_exception_handler(
+    QdrantCollectionNotFoundException,
+    qdrant_collection_not_found_exception_handler
+)
+
+app.add_exception_handler(
+    NoChunksFoundException,
+    no_chunks_found_exception_handler
+)
+
+app.add_exception_handler(
+    VideoNotProcessedException,
+    video_not_processed_exception_handler
 )
 
 app.add_exception_handler(
