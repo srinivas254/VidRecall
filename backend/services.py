@@ -29,6 +29,7 @@ import uuid
 import numpy as np 
 import torch
 import torch.nn.functional as F
+from fastapi import Depends
 from qdrant_client.models import (
     PointStruct,
     Filter,
@@ -43,6 +44,10 @@ from exceptions import (
     NoChunksFoundException,
     VideoNotProcessedException
 )
+
+from sqlalchemy.orm import Session 
+from pgsql_models import SmallVideo
+from database import get_db
 
 #regex pattern to validate the url
 url_pattern = (
@@ -229,8 +234,15 @@ def store_embeddings(
 
 
 #check if the video is processed first and return the video id
-def check_video_processed(video_id: str) -> str:
+def check_video_processed(video_id: str, db: Session = Depends(get_db)) -> tuple[str,str|None,str]:
+    
+    #first check the postgres
+    video = db.get(SmallVideo, video_id)
 
+    if video:
+        return video.video_id, video.content, "postgres"
+
+    #if not in postgresql check in qdrant
     my_collection = get_existing_collection()
 
     points, _ = qdrantClient.scroll(
@@ -248,12 +260,13 @@ def check_video_processed(video_id: str) -> str:
         limit = 1
     )
 
-    if not points:
-        raise VideoNotProcessedException(
-            f"Video {video_id} has not been processed yet"
-        )
+    if points:
+        video_id = points[0].payload["video_id"]
+        return video_id, None, "qdrant"
 
-    return points[0].payload["video_id"]
+    raise VideoNotProcessedException(
+        f"Video {video_id} has not been processed yet"
+        )
 
 
 #we pass the question query and return it's embedding

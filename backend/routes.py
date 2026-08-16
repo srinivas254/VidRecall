@@ -22,15 +22,23 @@ from llm_service import (
     llm_call
 )
 
+from no_rag_service import (
+    store_small_video
+)
+from database import (
+    get_db
+)
+from sqlalchemy.orm import Session
+
 router = APIRouter()
 
 @router.post("/video-process", response_model=VideoResponse)
-async def process_the_video(request: VideoRequest):
+async def process_the_video(request: VideoRequest, db: Session = Depends(get_db)):
 
     validate_youtube_url(request.url)
 
     video_id = extract_video_id(request.url)
-
+ 
     text_data = get_transcript(video_id)
 
     ragRequirement = should_use_rag(text_data)
@@ -48,24 +56,33 @@ async def process_the_video(request: VideoRequest):
             message = message, 
             video_id = video_id)
     else:
+
+        video = store_small_video(db, video_id, text_data)
+
         return VideoResponse(
-            message = f"Video is small enough, RAG not required",
-            video_id = video_id)
+            message = f"Video context persisted in the disk storage",
+            video_id = video.video_id)
+
 
 @router.post("/chat/{video_id}", response_model=QuestionResponse)
-async def retrieve_answer(request: QuestionRequest, video_id = Depends(check_video_processed)):
+async def retrieve_answer(request: QuestionRequest, video_info = Depends(check_video_processed)):
 
-    query_embedding = generate_query_embeddings(request.question)
+    video_id, content, source = video_info
 
-    relevant_chunks = retrieve_chunks(video_id, query_embedding)
+    if source == "postgres":
+        context = content
+    
+    else:
+        
+        query_embedding = generate_query_embeddings(request.question)
 
-    context = "\n\n".join(relevant_chunks)
+        relevant_chunks = retrieve_chunks(video_id, query_embedding)
+
+        context = "\n\n".join(relevant_chunks)
 
     answer = llm_call(context, request.question)
 
     return QuestionResponse(
         answer = answer
     )
-
-    
 

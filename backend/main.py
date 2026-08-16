@@ -20,7 +20,12 @@ from exception_handlers import (
     video_not_processed_exception_handler
 )
 
+from database import Base, engine
+from pgsql_models import SmallVideo
+
 app = FastAPI()
+
+Base.metadata.create_all(bind=engine)
 
 app.add_exception_handler(
     InvalidURLException,
