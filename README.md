@@ -1,354 +1,305 @@
 ````markdown
-# VidRecall 🎥
+# VidRecall
 
-> Chat with any YouTube video using Retrieval-Augmented Generation (RAG).
+VidRecall is a YouTube video chatbot built with React, FastAPI, PostgreSQL, Qdrant and an LLM.
 
-VidRecall is a YouTube conversational AI application built with **FastAPI, React, PostgreSQL, Qdrant, and an LLM**.
+A user provides a YouTube URL, the application processes the transcript and creates a chat session for asking questions about the video.
 
-The system uses a conditional retrieval architecture:
+The backend uses two different approaches depending on the size of the transcript:
 
-- Small transcripts are stored directly in PostgreSQL.
-- Large transcripts are chunked and stored in Qdrant as dense and sparse embeddings.
-- Large-video queries use hybrid retrieval with **dense vector search + BM25 + Reciprocal Rank Fusion (RRF)**.
-
----
-
-## ✨ Features
-
-- 🎥 YouTube URL validation
-- 🔎 Automatic video ID extraction
-- 📝 YouTube transcript extraction
-- 🔢 Token-based transcript size detection
-- 🗄️ PostgreSQL storage for small transcripts
-- 🧩 Chunking for large transcripts
-- 🧠 Dense vector embeddings
-- 🔤 BM25 sparse retrieval
-- 🎯 `video_id` metadata filtering
-- 🔀 Hybrid retrieval
-- ♻️ Result deduplication
-- 🏆 Reciprocal Rank Fusion (RRF)
-- 💬 Conversational question answering
-- 🧠 Previous conversation context
-- ⚡ React + Tailwind chat interface
+- Transcripts below 3000 tokens are stored directly in PostgreSQL.
+- Larger transcripts are chunked and stored in Qdrant with dense and sparse embeddings.
+- Large transcripts use hybrid retrieval with dense vector search and BM25, followed by Reciprocal Rank Fusion (RRF).
 
 ---
 
-# 🏗️ Architecture
+## Architecture
 
 ```text
-                         YouTube URL
-                              │
-                              ▼
-                    ┌──────────────────┐
-                    │  FastAPI Backend │
-                    └────────┬─────────┘
-                             │
-                             ▼
+                        YouTube URL
+                             |
+                             v
                     Validate + Extract ID
-                             │
-                             ▼
+                             |
+                             v
                      Fetch Transcript
-                             │
-                             ▼
-                       Tokenize Text
-                             │
-                    ┌────────┴────────┐
-                    │                 │
+                             |
+                             v
+                       Tokenization
+                             |
+                    +--------+--------+
+                    |                 |
               < 3000 tokens      >= 3000 tokens
-                    │                 │
-                    ▼                 ▼
-              PostgreSQL          Chunking
-                                      │
-                              ┌───────┴───────┐
-                              ▼               ▼
-                           Dense           Sparse
-                         Embedding          BM25
-                              │               │
-                              └───────┬───────┘
-                                      ▼
+                    |                 |
+                    v                 v
+               PostgreSQL          Chunking
+                                      |
+                               +------+------+
+                               |             |
+                               v             v
+                           Dense          Sparse
+                         Embedding         BM25
+                               |             |
+                               +------+------+
+                                      |
+                                      v
                                     Qdrant
 ````
 
 ---
 
-# 📥 Video Ingestion Pipeline
+## Video Processing
 
-When a user submits a YouTube URL, the backend performs the following steps:
+The video processing flow is:
 
 ```text
 YouTube URL
-     │
-     ▼
+    |
+    v
 Validate URL
-     │
-     ▼
+    |
+    v
 Extract Video ID
-     │
-     ▼
+    |
+    v
 Fetch Transcript
-     │
-     ▼
+    |
+    v
 Tokenize Transcript
-     │
-     ▼
+    |
+    v
 Check Token Count
-     │
-     ├────────────── < 3000 ──────────────┐
-     │                                    │
-     ▼                                    ▼
-PostgreSQL                          Split into Chunks
-video_id + content                       │
-                                         ▼
-                                  Dense Embeddings
-                                         │
-                                         ▼
-                                  Sparse BM25 Vectors
-                                         │
-                                         ▼
-                                      Qdrant
 ```
 
-### Small Transcripts
+If the transcript has fewer than 3000 tokens, the complete transcript is stored in PostgreSQL.
 
-If the transcript contains fewer than 3000 tokens, the complete content is stored in PostgreSQL:
+If the transcript has 3000 or more tokens, it is divided into chunks. Dense and sparse embeddings are generated for the chunks and stored in Qdrant.
 
-```text
-video_id
-content
-```
-
-There is no need for vector retrieval because the complete transcript can be provided directly to the LLM.
-
-### Large Transcripts
-
-If the transcript exceeds 3000 tokens:
-
-1. The transcript is divided into chunks.
-2. Dense embeddings are generated for each chunk.
-3. Sparse BM25 representations are generated.
-4. Both representations are stored in Qdrant.
-5. Each chunk contains metadata identifying its video.
-
-Example Qdrant payload:
+Each Qdrant point contains metadata similar to:
 
 ```json
 {
-  "video_id": "Qtl8lJwbd4g",
-  "chunk_index": 8,
-  "chunk_text": "..."
+    "video_id": "Qtl8lJwbd4g",
+    "chunk_index": 8,
+    "chunk_text": "..."
 }
 ```
 
----
-
-# 💬 Question Answering Pipeline
-
-When the user asks a question, the backend first checks where the video's content is stored.
-
-```text
-User Question
-      │
-      ▼
-Check Video Source
-      │
-      ├───────────────┐
-      │               │
-      ▼               ▼
- PostgreSQL          Qdrant
-      │               │
-      │               ▼
-      │        Hybrid Retrieval
-      │               │
-      │               ▼
-      │          Relevant Chunks
-      │               │
-      └───────┬───────┘
-              ▼
-          Build Context
-              │
-              ▼
-             LLM
-              │
-              ▼
-           Response
-```
+The `video_id` is used to restrict retrieval to the requested video.
 
 ---
 
-# 🗄️ PostgreSQL Retrieval
+## PostgreSQL Path
 
-For small transcripts:
+Small transcripts do not need vector retrieval.
+
+The backend retrieves the complete transcript using the `video_id` and passes it to the LLM.
 
 ```text
 Question
    +
-Complete Video Content
+Video Content
    +
 System Prompt
    +
 Last 3 Conversations
-   │
-   ▼
+   |
+   v
   LLM
-   │
-   ▼
+   |
+   v
 Answer
 ```
 
-The entire transcript is retrieved using the `video_id` and passed to the LLM as context.
+This keeps the retrieval process simple when the complete transcript is small enough to be used as context.
 
 ---
 
-# 🔎 Qdrant Hybrid Retrieval
+## Qdrant Path
 
-For large transcripts, VidRecall performs two retrieval methods.
-
-### Dense Search
-
-The question is converted into a dense embedding and searched against the stored chunk embeddings using vector similarity.
-
-A `video_id` filter ensures that only chunks belonging to the requested video are searched.
-
-### BM25 Search
-
-The same question is also converted into a BM25 sparse representation.
-
-This provides lexical/keyword-based retrieval and helps find chunks containing important exact terms.
+For larger transcripts, the question is processed using two retrieval methods.
 
 ```text
-                  Question
-                     │
-          ┌──────────┴──────────┐
-          ▼                     ▼
-    Dense Embedding         BM25 Sparse
-          │                     │
-          ▼                     ▼
-    Vector Search          Keyword Search
-          │                     │
-          └──────────┬──────────┘
-                     ▼
-               Top-K Results
+                    Question
+                       |
+             +---------+---------+
+             |                   |
+             v                   v
+       Dense Embedding       BM25 Search
+             |                   |
+             v                   v
+       Vector Search        Keyword Search
+             |                   |
+             +---------+---------+
+                       |
+                       v
+                 Combine Results
+                       |
+                       v
+                  Deduplicate
+                       |
+                       v
+                  RRF Ranking
+                       |
+                       v
+                  Final Top-K
+                       |
+                       v
+                      LLM
 ```
+
+Both retrieval methods use the `video_id` filter so that chunks from other videos are not considered.
+
+### Dense retrieval
+
+The question is converted into a dense embedding and searched against the stored chunk embeddings using cosine similarity.
+
+Only relevant results above the configured similarity threshold are kept.
+
+### BM25 retrieval
+
+The question is also searched using Qdrant's BM25 sparse retrieval.
+
+BM25 provides lexical matching and can retrieve chunks containing important terms from the question.
+
+The best `TOP_K` results from both methods are collected.
 
 ---
 
-# 🏆 Reciprocal Rank Fusion
+## Reciprocal Rank Fusion
 
-Dense and BM25 searches produce different scoring systems, so their raw scores are not directly combined.
+Dense and BM25 retrieval use different scoring systems, so their raw scores are not directly combined.
 
-Instead, VidRecall combines their **rank positions** using Reciprocal Rank Fusion.
+Instead, the rank of each chunk in each retrieval result is used.
+
+For example:
 
 ```text
-Dense Results              BM25 Results
+Dense:
 
-Rank 1 → Chunk 8           Rank 1 → Chunk 15
-Rank 2 → Chunk 12          Rank 2 → Chunk 8
-Rank 3 → Chunk 15          Rank 3 → Chunk 19
+1. Chunk 8
+2. Chunk 12
+3. Chunk 15
 
-             │
-             ▼
-          Combine
-             │
-             ▼
-        Deduplicate
-             │
-             ▼
-             RRF
-             │
-             ▼
-       Final Top-K Chunks
+BM25:
+
+1. Chunk 15
+2. Chunk 8
+3. Chunk 19
 ```
 
-RRF rewards chunks that appear highly ranked across both retrieval methods.
+The results are combined and duplicate chunks are removed.
 
-The final relevant chunks are passed to the LLM.
+RRF is then calculated using the ranks:
+
+```text
+             1
+RRF(d) = Σ ---------
+         k + rank
+```
+
+A chunk that appears near the top of both retrieval results receives a higher RRF score.
+
+The final ranked chunks are used as the context for the LLM.
 
 ---
 
-# 🧠 LLM Context
+## Chat Flow
 
-For both retrieval paths, the LLM receives:
+After a video has been processed, the user starts a session using the YouTube URL.
+
+The backend checks the processed video and returns its `video_id` and source.
+
+The source determines whether the question should use PostgreSQL or Qdrant.
+
+```text
+Begin Session
+      |
+      v
+Check Video
+      |
+      v
+Return Video ID + Source
+      |
+      v
+Chat
+```
+
+For every question, the backend builds the LLM context using:
 
 ```text
 System Prompt
 +
-User Question
+Current Question
 +
-Retrieved Context
+Video Context
 +
 Last 3 Conversations
 ```
 
-For PostgreSQL:
+For PostgreSQL videos, the context is the complete transcript.
 
-```text
-Retrieved Context = Complete Transcript
-```
-
-For Qdrant:
-
-```text
-Retrieved Context = Final Top-K Chunks
-```
-
-This keeps responses grounded in the video's actual content.
+For Qdrant videos, the context is the final Top-K chunks returned by the retrieval pipeline.
 
 ---
 
-# 🖥️ Frontend Workflow
+## Frontend
 
-The frontend provides a simple three-step experience:
+The frontend is built with React and Tailwind CSS.
+
+The main user flow is:
 
 ```text
 Paste YouTube URL
-        │
-        ▼
+        |
+        v
 Begin Session
-        │
-        ▼
-Video Processing
-        │
-        ▼
-Chat Session
-        │
-        ▼
+        |
+        v
+Chat Page
+        |
+        v
 Ask Questions
-        │
-        ▼
-Receive AI Responses
+        |
+        v
+Receive Answers
 ```
 
-The chat interface displays:
-
-* User questions
-* Assistant responses
-* Conversation history
+The frontend communicates with the FastAPI backend for video processing, session creation and chat.
 
 ---
 
-# 🔌 Backend Application Flow
+## API Flow
+
+The application has three main backend operations.
 
 ### Process Video
 
 ```text
 YouTube URL
-    ↓
-Validation
-    ↓
-Transcript Extraction
-    ↓
-Token Count
-    ↓
-PostgreSQL OR Qdrant
+    |
+    v
+Validate
+    |
+    v
+Extract Video ID
+    |
+    v
+Fetch Transcript
+    |
+    v
+Store in PostgreSQL or Qdrant
 ```
 
 ### Begin Session
 
 ```text
 YouTube URL
-    ↓
+    |
+    v
 Check Processed Video
-    ↓
+    |
+    v
 Return Video ID + Source
 ```
 
@@ -356,84 +307,87 @@ Return Video ID + Source
 
 ```text
 Question
-    ↓
+    |
+    v
 Check Source
-    ↓
-Retrieve Context
-    ↓
-Build LLM Prompt
-    ↓
+    |
+    +---- PostgreSQL -> Fetch Content
+    |
+    +---- Qdrant -> Hybrid Retrieval
+                         |
+                         v
+                       RRF
+                         |
+                         v
+                    Get Context
+    |
+    v
+Build LLM Request
+    |
+    v
 Generate Response
 ```
 
 ---
 
-# 🛠️ Tech Stack
+## Tech Stack
 
-## Frontend
+### Frontend
 
 * React
 * Tailwind CSS
 * React Router
 
-## Backend
+### Backend
 
 * Python
 * FastAPI
 * SQLAlchemy
 
-## Databases
+### Databases
 
 * PostgreSQL
 * Qdrant
 
-## AI & Retrieval
+### AI and Retrieval
 
 * Dense Embeddings
 * BM25 Sparse Retrieval
 * Cosine Similarity
 * Metadata Filtering
-* Hybrid Search
+* Hybrid Retrieval
 * Reciprocal Rank Fusion
-* LLM Generation
+* LLM
 
 ---
 
-# 📁 Project Structure
+## Project Structure
 
 ```text
 VidRecall/
-│
-├── frontend/
-│   ├── src/
-│   ├── components/
-│   ├── pages/
-│   └── ...
-│
-├── backend/
-│   ├── routes/
-│   ├── services/
-│   ├── repositories/
-│   ├── models/
-│   └── ...
-│
-├── requirements.txt
-├── README.md
-└── ...
+|
++-- frontend/
+|   +-- src/
+|       +-- components/
+|       +-- pages/
+|       +-- ...
+|
++-- backend/
+|   +-- routes/
+|   +-- services/
+|   +-- repositories/
+|   +-- models/
+|   +-- ...
+|
++-- requirements.txt
++-- README.md
 ```
 
 ---
 
-# 🚀 Getting Started
+## Running the Project
 
-## Clone
-
-```bash
-git clone <repository-url>
-cd VidRecall
-```
-
-## Backend
+### Backend
 
 Create a virtual environment:
 
@@ -453,16 +407,9 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Configure environment variables:
+Configure the required environment variables for PostgreSQL, Qdrant and the LLM provider.
 
-```env
-DATABASE_URL=your_postgresql_connection_string
-QDRANT_URL=your_qdrant_url
-QDRANT_API_KEY=your_qdrant_api_key
-GROQ_API_KEY=your_llm_api_key
-```
-
-Run the backend:
+Start the FastAPI server:
 
 ```bash
 uvicorn main:app --reload
@@ -474,7 +421,7 @@ API documentation:
 http://127.0.0.1:8000/docs
 ```
 
-## Frontend
+### Frontend
 
 ```bash
 cd frontend
@@ -484,62 +431,50 @@ npm run dev
 
 ---
 
-# 🎯 Key Design Decision
+## Design Decision
 
-VidRecall does not blindly send every transcript through a vector database.
+The main design decision in VidRecall is using different storage and retrieval strategies based on transcript size.
 
-Instead:
+For smaller transcripts:
 
 ```text
-Small Transcript
-      │
-      ▼
-PostgreSQL
-      │
-      ▼
-Complete Context → LLM
+Transcript -> PostgreSQL -> Complete Context -> LLM
+```
 
+For larger transcripts:
 
-Large Transcript
-      │
-      ▼
+```text
+Transcript
+    |
+    v
+Chunks
+    |
+    +--> Dense Embeddings
+    |
+    +--> Sparse BM25
+    |
+    v
 Qdrant
-      │
-      ├── Dense Search
-      ├── BM25 Search
-      └── RRF
-            │
-            ▼
-      Relevant Context → LLM
+    |
+    v
+Hybrid Retrieval
+    |
+    v
+RRF
+    |
+    v
+Relevant Context
+    |
+    v
+LLM
 ```
 
-This keeps the architecture simple for small videos while providing scalable hybrid retrieval for larger videos.
+This avoids unnecessary vector retrieval for small transcripts while allowing larger videos to be handled through retrieval.
 
 ---
 
-# 📚 What This Project Demonstrates
+## Author
 
-VidRecall is an end-to-end RAG application covering:
+Srinivas S.
 
-* FastAPI backend development
-* PostgreSQL database integration
-* Qdrant vector database
-* Dense embeddings
-* Sparse BM25 retrieval
-* Hybrid search
-* Metadata filtering
-* Reciprocal Rank Fusion
-* Context-aware LLM generation
-* Conversational AI
-* React frontend development
-
----
-
-# 👨‍💻 Author
-
-**Srinivas S.**
-
-Built as a practical exploration of modern RAG systems, hybrid information retrieval, vector databases, FastAPI, and LLM-powered applications.
-
-```
 ```
