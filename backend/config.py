@@ -14,7 +14,9 @@ client = Groq(api_key=my_api_key)
 
 #embedding model & LLM model
 EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
-LLM_MODEL = "llama-3.3-70b-versatile"
+LLM_MODEL = "openai/gpt-oss-20b"
+SPARSE_RETRIEVAL_MODEL = "qdrant/bm25"
+SPARSE_VECTOR_NAME = "chunk-text-bm25"
 
 # Direct LLM vs RAG
 DIRECT_LLM_THRESHOLD = 3000
@@ -26,6 +28,9 @@ CHUNK_OVERLAP = 50
 
 # top k chunks Retrieval
 TOP_K = 3
+
+#reciprocal rank fusion constant
+RRF_K = 60
 
 my_qdrant_api_key = os.getenv("QDRANT_API_KEY")
 

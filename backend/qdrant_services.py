@@ -1,10 +1,13 @@
 from qdrant_client.models import (
     VectorParams,
+    SparseVectorParams,
+    SparseIndexParams,
     Distance
 ) 
 
 from config import(
     qdrantClient,
+    SPARSE_VECTOR_NAME,
     COLLECTION_NAME
 )
 
@@ -23,13 +26,24 @@ def create_collection_if_not_exists():
     if COLLECTION_NAME in existing_collections:
         return COLLECTION_NAME
 
-    #create the collection
+    # create the collection
     qdrantClient.create_collection(
-        collection_name = COLLECTION_NAME,
-        vectors_config = VectorParams(
-            size = 384,
-            distance = Distance.COSINE
-        )
+        collection_name=COLLECTION_NAME,
+
+        # Dense vector configuration
+        vectors_config=VectorParams(
+            size=384,
+            distance=Distance.COSINE
+        ),
+
+        # Sparse vector configuration
+        sparse_vectors_config={
+            SPARSE_VECTOR_NAME: SparseVectorParams(
+                index=SparseIndexParams(
+                    on_disk=False
+                )
+            )
+        }
     )
 
      # Create payload index for video_id

@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends
 from schemas import (
     VideoRequest,
     VideoResponse,
+    SessionRequest,
+    SessionResponse,
     QuestionRequest,
     QuestionResponse
 )
@@ -15,7 +17,8 @@ from services import (
     store_embeddings,
     check_video_processed,
     generate_query_embeddings,
-    retrieve_chunks
+    retrieve_chunks,
+    get_video_content
 )
 
 from llm_service import (
@@ -53,8 +56,8 @@ async def process_the_video(request: VideoRequest, db: Session = Depends(get_db)
         message = f"Video processed with {total_points} points"
         
         return VideoResponse(
-            message = message, 
-            video_id = video_id)
+            message = message
+            )
     else:
 
         video = store_small_video(db, video_id, text_data)
@@ -64,19 +67,33 @@ async def process_the_video(request: VideoRequest, db: Session = Depends(get_db)
             video_id = video.video_id)
 
 
+@router.post("/session", response_model=SessionResponse)
+async def create_session(request: SessionRequest, db: Session = Depends(get_db)):
+
+    validate_youtube_url(request.url)
+
+    video_id = extract_video_id(request.url)
+
+    video_id, source = check_video_processed(video_id, db)
+
+    return SessionResponse(
+        video_id=video_id,
+        source=source
+    )
+
+
 @router.post("/chat/{video_id}", response_model=QuestionResponse)
-async def retrieve_answer(request: QuestionRequest, video_info = Depends(check_video_processed)):
+async def retrieve_answer(video_id: str, request: QuestionRequest, db: Session = Depends(get_db)):
 
-    video_id, content, source = video_info
-
-    if source == "postgres":
+    if request.source == "postgres":
+        content = get_video_content(video_id, db)
         context = content
     
     else:
         
         query_embedding = generate_query_embeddings(request.question)
 
-        relevant_chunks = retrieve_chunks(video_id, query_embedding)
+        relevant_chunks = retrieve_chunks(video_id, request.question, query_embedding)
 
         context = "\n\n".join(relevant_chunks)
 

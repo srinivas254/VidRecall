@@ -5,6 +5,8 @@ from config import (
     SIMILARITY_THRESHOLD,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
+    SPARSE_RETRIEVAL_MODEL,
+    SPARSE_VECTOR_NAME,
     TOP_K)
 
 from youtube_transcript_api import (
@@ -24,6 +26,10 @@ from qdrant_services import (
     get_existing_collection
 )
 
+from rrf_service import (
+    reciprocal_rank_fusion
+)
+
 import re
 import uuid
 import numpy as np 
@@ -36,6 +42,8 @@ from qdrant_client.models import (
     FieldCondition,
     MatchValue
 ) 
+from qdrant_client import models
+
 from exceptions import (
     InvalidURLException,
     InvalidVideoIDException,
@@ -210,9 +218,20 @@ def store_embeddings(
     for index, embedding in enumerate(embeddings):
 
         point = PointStruct(
-            id = str(uuid.uuid4()),
-            vector = embedding,
-            payload = {
+            id=str(uuid.uuid4()),
+
+            vector={
+                # Existing dense embedding
+                "": embedding,
+
+                # BM25 sparse embedding
+                SPARSE_VECTOR_NAME: models.Document(
+                    text=chunks[index],
+                    model=SPARSE_RETRIEVAL_MODEL
+                )
+            },
+
+            payload={
                 "video_id": video_id,
                 "chunk_index": index,
                 "chunk_text": chunks[index]
@@ -234,13 +253,13 @@ def store_embeddings(
 
 
 #check if the video is processed first and return the video id
-def check_video_processed(video_id: str, db: Session = Depends(get_db)) -> tuple[str,str|None,str]:
+def check_video_processed(video_id: str, db: Session) -> tuple[str,str]:
     
     #first check the postgres
     video = db.get(SmallVideo, video_id)
 
     if video:
-        return video.video_id, video.content, "postgres"
+        return video.video_id, "postgres"
 
     #if not in postgresql check in qdrant
     my_collection = get_existing_collection()
@@ -262,7 +281,7 @@ def check_video_processed(video_id: str, db: Session = Depends(get_db)) -> tuple
 
     if points:
         video_id = points[0].payload["video_id"]
-        return video_id, None, "qdrant"
+        return video_id, "qdrant"
 
     raise VideoNotProcessedException(
         f"Video {video_id} has not been processed yet"
@@ -302,38 +321,132 @@ def generate_query_embeddings(question: str) -> list[float]:
     return final_embedding.squeeze().tolist()
 
 #retrieve the relevant video's chunks
-def retrieve_chunks(video_id: str, query_embedding: list[float]) -> list[str]:
+def retrieve_chunks(video_id: str, query: str, query_embedding: list[float]) -> list[str]:
 
     my_collection = get_existing_collection()
 
-    #from the queryResponse object we filter it based on video id and 
-    #do a similarity vector search and retrieve top k chunks
-    results = qdrantClient.query_points(
-        collection_name = my_collection,
-        query = query_embedding,
-        limit = TOP_K,
-        query_filter = Filter(
-            must = [
-                FieldCondition(
-                    key = "video_id",
-                    match = MatchValue(
-                        value = video_id
-                    )
-                )
-            ]
-        )
+    #add a filter to search based on video id
+    video_filter = Filter(
+        must=[
+            FieldCondition(
+                key="video_id",
+                match=MatchValue(value=video_id)
+            )
+        ]
     )
 
-    if not results.points:
+    #do a similarity vector search with metadata filtering and retrieve top k chunks
+    vector_results = qdrantClient.query_points(
+        collection_name=my_collection,
+        query=query_embedding,
+        limit=TOP_K,
+        query_filter=video_filter
+    )
+
+    if not vector_results.points:
         raise NoChunksFoundException("No chunks found for this video")
 
-    #from that queryResponse we filter out only the chunks and return it if it's similarity
+    #from that queryResponse we filter out only the chunks with the point object 
+    #  and return it if it's similarity
     #score is greater than cosine 45
-    relevant_chunks = [point.payload["chunk_text"]
-                    for point in results.points
+    dense_chunks = [point
+                    for point in vector_results.points
                     if point.score >= SIMILARITY_THRESHOLD]
+    
+    # Qdrant's BM25 model converts the question into its
+    # sparse representation internally and searches against
+    # the sparse vectors stored during ingestion.
+    keyword_results = qdrantClient.query_points(
+        collection_name=my_collection,
 
-    if not relevant_chunks:
-        raise NoChunksFoundException("No relevant chunks found for this video")
+        query=models.Document(
+            text=query,
+            model=SPARSE_RETRIEVAL_MODEL
+        ),
 
-    return relevant_chunks
+        # Tell Qdrant which sparse vector to search.
+        using=SPARSE_VECTOR_NAME,
+
+        # Search only this video's chunks.
+        query_filter=video_filter,
+
+        # Get the best TOP_K keyword matches.
+        limit=TOP_K
+    )
+
+    keyword_chunks = keyword_results.points
+        
+
+    if not dense_chunks and not keyword_chunks:
+        raise NoChunksFoundException(
+            "No relevant chunks found for this video"
+        )
+
+    #combine dense + sparse chunk results
+    combined_results = dense_chunks + keyword_chunks
+
+    #deduplicate chunks (collect only the unique chunk point objects)
+    unique_chunks = {}
+
+    for point in combined_results:
+
+        chunk_index = point.payload["chunk_index"]
+
+        # Only add the chunk the first time we encounter it.
+        if chunk_index not in unique_chunks:
+            unique_chunks[chunk_index] = point
+
+    # Store the rank of each unique chunk
+    # in both retrieval methods.
+    chunk_ranks = {}
+
+    # Dense ranking
+    for rank, point in enumerate(dense_chunks, start=1):
+
+        chunk_index = point.payload["chunk_index"]
+
+        if chunk_index not in chunk_ranks:
+            chunk_ranks[chunk_index] = {
+                "dense_rank": None,
+                "sparse_rank": None
+            }
+
+        chunk_ranks[chunk_index]["dense_rank"] = rank
+
+
+    # Sparse / BM25 ranking
+    for rank, point in enumerate(keyword_chunks, start=1):
+
+        chunk_index = point.payload["chunk_index"]
+
+        if chunk_index not in chunk_ranks:
+            chunk_ranks[chunk_index] = {
+                "dense_rank": None,
+                "sparse_rank": None
+            }
+
+        chunk_ranks[chunk_index]["sparse_rank"] = rank
+
+    #we will rank the chunks based on RRF score
+    ranked_chunks = reciprocal_rank_fusion(chunk_ranks)
+
+    #convert the ranked chunks into ranked points
+    ranked_points = [
+    unique_chunks[chunk_index]
+    for chunk_index in ranked_chunks
+    ]
+
+    #get the final top k chunk text 
+    final_chunks = [
+    point.payload["chunk_text"]
+    for point in ranked_points[:TOP_K]
+    ]
+    
+    return final_chunks
+
+
+#retrieve the context from pgsql for generation
+def get_video_content(video_id: str, db: Session) -> str:
+    video = db.get(SmallVideo, video_id)
+
+    return video.content
