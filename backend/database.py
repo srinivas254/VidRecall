@@ -1,7 +1,6 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase  
-
-DATABASE_URL = "postgresql+psycopg://postgres:master@localhost:5432/youtube_rag"
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from config import my_database_url as DATABASE_URL
 
 engine = create_engine(
     DATABASE_URL,

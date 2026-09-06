@@ -36,6 +36,8 @@ my_qdrant_api_key = os.getenv("QDRANT_API_KEY")
 
 my_qdrant_url = os.getenv("QDRANT_URL")
 
+my_database_url = os.getenv("DATABASE_URL")
+
 #create a vectorDB client
 qdrantClient = QdrantClient(
     url = my_qdrant_url,
