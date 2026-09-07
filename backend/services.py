@@ -117,7 +117,10 @@ def get_transcript(video_id: str) -> str:
 
 #check if RAG is neccessary
 def should_use_rag(transcript: str) -> bool:
-    tokens = tokenizer.encode(transcript)
+    tokens = tokenizer.encode(
+        transcript,
+        truncation=False
+        )
     print(f"tokens: {len(tokens)}")
     return len(tokens) > DIRECT_LLM_THRESHOLD
 
